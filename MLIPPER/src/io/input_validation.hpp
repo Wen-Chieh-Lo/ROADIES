@@ -4,7 +4,10 @@
 #include <stdexcept>
 #include <string>
 
-#include "io/parse_file.hpp"
+namespace parse {
+struct Alignment;
+struct ModelConfig;
+}
 
 namespace mlipper {
 namespace input {
@@ -19,20 +22,6 @@ public:
     ValidationError(const std::string& option_name, const std::string& message)
         : CliError(option_name + ": " + message) {}
 };
-
-class RequiredError : public CliError {
-public:
-    explicit RequiredError(const std::string& requirement)
-        : CliError(requirement + " is required") {}
-};
-
-std::string read_file_to_string(const std::string& path);
-
-void validate_newick_with_pll(
-    const std::string& tree_text,
-    const std::string& option_name);
-
-std::string resolve_path(const std::filesystem::path& base, const std::string& p);
 
 std::filesystem::path normalize_cli_path(
     const std::filesystem::path& base,
