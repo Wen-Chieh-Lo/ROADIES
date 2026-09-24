@@ -304,8 +304,6 @@ int validate_local_spr_candidates(
     double& current_logL)
 {
     int accepted_candidates = 0;
-    const bool revalidate_after_each_commit =
-        ctx.move_type == mlipper::TopologyMoveType::NNI;
     for (size_t candidate_idx = 0;
          candidate_idx < validation_candidates.size();
          ++candidate_idx) {
@@ -331,8 +329,7 @@ int validate_local_spr_candidates(
                  ctx.directional_boundary_node_ids.end())) {
             continue;
         }
-        if (revalidate_after_each_commit &&
-            !local_spr_candidate_still_legal(
+        if (!local_spr_candidate_still_legal(
                 base_tree,
                 unit,
                 candidate,
@@ -342,16 +339,23 @@ int validate_local_spr_candidates(
 
         TreeBuildResult candidate_tree = base_tree;
         PruneInfo prune_info;
-        if (!prune_subtree_for_spr(candidate_tree, candidate.prune_root_id, prune_info)) {
+        if (!prune_subtree_for_spr(
+                candidate_tree,
+                candidate.prune_root_id,
+                prune_info)) {
             continue;
         }
 
         std::vector<int> current_subtree_nodes;
-        collect_subtree_node_ids(candidate_tree, prune_info.pruned_id, current_subtree_nodes);
+        collect_subtree_node_ids(
+            candidate_tree,
+            prune_info.pruned_id,
+            current_subtree_nodes);
         const std::vector<char> current_subtree_mask =
             build_local_spr_subtree_mask(candidate_tree, current_subtree_nodes);
         if (candidate.regraft_child_id < 0 ||
-            candidate.regraft_child_id >= static_cast<int>(candidate_tree.nodes.size())) {
+            candidate.regraft_child_id >=
+                static_cast<int>(candidate_tree.nodes.size())) {
             continue;
         }
         const int regraft_parent =
@@ -364,23 +368,6 @@ int validate_local_spr_candidates(
         if (!unit.envelope_mask[(size_t)candidate.regraft_child_id] ||
             !unit.envelope_mask[(size_t)regraft_parent]) {
             continue;
-        }
-
-        if (!revalidate_after_each_commit) {
-            std::vector<int> legal_edges = collect_candidate_edges(
-                candidate_tree,
-                prune_info.sibling_id,
-                prune_info.grandparent_id,
-                ctx.radius,
-                prune_info.pruned_id,
-                prune_info.free_internal_id);
-            local_spr_assert_candidate_legal(
-                base_tree,
-                unit,
-                candidate.prune_root_id,
-                candidate.subtree_nodes,
-                legal_edges,
-                candidate.regraft_child_id);
         }
 
         const TreeNode& pruned_node = candidate_tree.nodes[
@@ -488,8 +475,10 @@ int validate_local_spr_candidates(
             }
             base_tree = std::move(candidate_tree);
             ++accepted_candidates;
-            if (revalidate_after_each_commit &&
-                candidate_idx + 1 < validation_candidates.size()) {
+            // All scores came from the pre-commit topology. Remove candidates
+            // whose prune context or destination became stale before trying
+            // the next move.
+            if (candidate_idx + 1 < validation_candidates.size()) {
                 auto keep_begin =
                     validation_candidates.begin() +
                     static_cast<std::ptrdiff_t>(candidate_idx + 1);
@@ -637,45 +626,10 @@ void release_local_spr_session_workspace_set(
     release_local_spr_ranking_workspace(workspace_set.ranking_workspace);
 }
 
-LocalSPRPersistentWorkspace::LocalSPRPersistentWorkspace() = default;
-
-LocalSPRPersistentWorkspace::~LocalSPRPersistentWorkspace() = default;
-
-LocalSPRPersistentWorkspace::LocalSPRPersistentWorkspace(
-    LocalSPRPersistentWorkspace&& other) noexcept = default;
-
-LocalSPRPersistentWorkspace& LocalSPRPersistentWorkspace::operator=(
-    LocalSPRPersistentWorkspace&& other) noexcept = default;
-
-LocalSPRExecutionResources* select_local_spr_execution_resources(
-    TopologyRefinementRunContext& ctx,
-    LocalSPRExecutionResources& transient_resources)
-{
-    if (ctx.persistent_workspace == nullptr) {
-        return &transient_resources;
-    }
-    if (!ctx.persistent_workspace->impl) {
-        ctx.persistent_workspace->impl =
-            std::make_unique<LocalSPRPersistentWorkspaceImpl>();
-    }
-    return &ctx.persistent_workspace->impl->execution_resources;
-}
-
-void ensure_local_spr_execution_resources(
-    LocalSPRExecutionResources& resources,
-    int worker_count)
-{
-    const int effective_worker_count = std::max(1, worker_count);
-    if (resources.worker_pool &&
-        resources.worker_count == effective_worker_count) {
-        return;
-    }
-    resources.worker_pool.reset();
-    resources.worker_count = effective_worker_count;
-    resources.worker_pool =
-        std::make_unique<FixedThreadPool>(effective_worker_count);
-}
-
+// Run iterative SPR/NNI refinement with approximate candidate scoring followed
+// by exact validation. Each accepted round rebuilds host/device representations
+// and audits the rebuilt likelihood against the validated score; this is the
+// synchronization boundary that makes cached node-indexed search state stale.
 void run_topology_refinement(TopologyRefinementRunContext& ctx) {
     const char* refinement_name =
         ctx.move_type == mlipper::TopologyMoveType::NNI
@@ -689,15 +643,13 @@ void run_topology_refinement(TopologyRefinementRunContext& ctx) {
     }
 
     int rounds_executed = 0;
-    LocalSPRExecutionResources transient_execution_resources;
-    LocalSPRExecutionResources* execution_resources =
-        select_local_spr_execution_resources(
-            ctx,
-            transient_execution_resources);
-    ensure_local_spr_execution_resources(
-        *execution_resources,
-        local_spr_scoring_lane_count());
-    FixedThreadPool& worker_pool = *execution_resources->worker_pool;
+    const bool uses_direct_nni_scoring =
+        ctx.move_type == mlipper::TopologyMoveType::NNI &&
+        ctx.per_rate_scaling;
+    const int scoring_lane_count = uses_direct_nni_scoring
+        ? 1
+        : choose_local_spr_scoring_lane_count(ctx.state.device);
+    tbb::task_arena task_arena(scoring_lane_count);
     LocalSPREvalWorkspace& eval_workspace =
         ctx.session_workspaces.eval_workspace;
     LocalSPRRankingWorkspace& ranking_workspace =
@@ -768,7 +720,8 @@ void run_topology_refinement(TopologyRefinementRunContext& ctx) {
                 base_tree,
                 repair_units,
                 ranking_workspace,
-                worker_pool,
+                task_arena,
+                scoring_lane_count,
                 search_summary);
 
         std::sort(
@@ -777,9 +730,9 @@ void run_topology_refinement(TopologyRefinementRunContext& ctx) {
             local_spr_candidate_better);
 
         std::vector<LocalSPRCandidateMove> validation_candidates;
-        const bool revalidate_after_each_commit =
+        const bool validate_full_ranked_pool =
             ctx.move_type == mlipper::TopologyMoveType::NNI;
-        if (revalidate_after_each_commit) {
+        if (validate_full_ranked_pool) {
             validation_candidates = ranked_candidates;
         } else {
             validation_candidates = select_local_spr_candidates(
@@ -800,7 +753,7 @@ void run_topology_refinement(TopologyRefinementRunContext& ctx) {
                   << ", cluster=" << ctx.cluster_threshold
                   << ", topk=" << ctx.topk_per_unit
                   << ", selection="
-                  << (revalidate_after_each_commit
+                  << (validate_full_ranked_pool
                           ? "dynamic-validation"
                           : "one-per-unit")
                   << ", pool=per-unit-topk"

@@ -150,6 +150,9 @@ struct TreeBuildResult {
     std::unordered_map<std::string,int> tip_node_by_name;
 };
 
+// Parse a rooted Newick tree and assign dense node IDs. Tip names must match
+// msa_tip_names exactly; the returned preorder/postorder and parent/child links
+// are mutually consistent and branch lengths are normalized for MLIPPER use.
 TreeBuildResult build_tree_from_newick_with_pll(
     const std::vector<std::string>& msa_tip_names,
     const std::string& newick_text);
@@ -313,9 +316,13 @@ struct PlacementCommitContext {
     std::vector<std::string>* inserted_query_names = nullptr;
 };
 
+// Maps one full-tree NNI target into a compact scoring slot. When
+// direct_edge_outside_src is valid its cached outside message is copied;
+// otherwise parent_down_src and sibling_up_src are combined through the sibling
+// and second PMATs to reconstruct the same message in dst_target.
 struct DirectNNIContextOp {
     int target_src = -1;
-    int direct_midbase_src = -1;
+    int direct_edge_outside_src = -1;
     int parent_down_src = -1;
     int sibling_up_src = -1;
     int second_pmat_src = -1;
@@ -364,6 +371,10 @@ void fill_pmats_in_host_packing(
     bool include_midpoint_pmats = true
 );
 
+// Allocate and populate an owning device tree on the caller's current CUDA
+// device. query storage is sized for the loaded batch; insert_capacity reserves
+// additional node/tip slots for commit mode. On failure device_tree remains
+// empty. Kernel-facing DeviceTree copies are non-owning views of these buffers.
 void allocate_device_tree_on_current_gpu(
     OwnedDeviceTree& device_tree,
     const TreeBuildResult& tree,
@@ -514,7 +525,7 @@ void UpdateTreeClvsDownwardOnlyPrepared(
 
 // Sequential branch-coordinate traversal primitives. Each call refreshes one
 // directional message across all sites without rebuilding the full tree.
-void BuildSingleTreeMidBaseWarpSitePrepared(
+void BuildSingleTreeEdgeOutsideWarpSitePrepared(
     DeviceTree& D,
     PlacementOpBuffer& prepared_downward_ops,
     int operation_index,

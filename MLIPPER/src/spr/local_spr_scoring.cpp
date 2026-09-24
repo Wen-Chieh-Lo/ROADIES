@@ -2,8 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <exception>
-#include <future>
+#include <iostream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -13,6 +12,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include <tbb/parallel_for.h>
 
 #include "placement/placement.cuh"
 #include "nni.hpp"
@@ -38,6 +39,27 @@ bool local_spr_edge_touches_forbidden_node(
                forbidden.end() ||
            std::find(forbidden.begin(), forbidden.end(), edge_parent) !=
                forbidden.end();
+}
+
+// Placement targets are identified by the child endpoint of an edge. After a
+// root-adjacent prune, the sibling is promoted to the artificial root and no
+// longer identifies an edge. Use its left-child edge as the stable baseline
+// representation in that one case.
+int canonical_unchanged_topology_edge_child(
+    const TreeBuildResult& pruned_tree,
+    int sibling_id)
+{
+    if (sibling_id < 0 ||
+        sibling_id >= static_cast<int>(pruned_tree.nodes.size())) {
+        return -1;
+    }
+
+    const TreeNode& sibling =
+        pruned_tree.nodes[static_cast<size_t>(sibling_id)];
+    if (sibling.parent >= 0) {
+        return sibling_id;
+    }
+    return sibling.is_tip ? -1 : sibling.left;
 }
 
 } // namespace
@@ -133,6 +155,19 @@ std::vector<LocalSPRPruneRootWorkItem> build_local_spr_prune_root_work_items(
                 unit.envelope_mask,
                 subtree_mask,
                 inner_candidate_edges);
+        // Keep the unchanged-topology score even when the envelope excludes
+        // one endpoint. Every alternate move needs this zero-gain reference.
+        const int baseline_edge_child_id =
+            canonical_unchanged_topology_edge_child(
+                pruned_tree,
+                prune_info.sibling_id);
+        if (baseline_edge_child_id >= 0 &&
+            std::find(
+                legal_inner_candidate_edges.begin(),
+                legal_inner_candidate_edges.end(),
+                baseline_edge_child_id) == legal_inner_candidate_edges.end()) {
+            legal_inner_candidate_edges.push_back(baseline_edge_child_id);
+        }
         if (legal_inner_candidate_edges.empty()) {
             continue;
         }
@@ -446,13 +481,104 @@ void remember_local_spr_dirty_upward_nodes(LocalSPRScoringWorkspace& workspace)
     }
 }
 
-int local_spr_scoring_lane_count()
+size_t estimate_local_spr_scoring_lane_bytes(const DeviceTree& dev)
 {
-    int lanes = 8;
+    const size_t nodes = mlipper::util::checked_add_size(
+        static_cast<size_t>(std::max(dev.N, 0)), 2,
+        "local SPR lane node capacity");
+    const size_t tips = mlipper::util::checked_add_size(
+        static_cast<size_t>(std::max(dev.tips, 0)), 1,
+        "local SPR lane tip capacity");
+    const size_t sites = dev.sites;
+    const size_t rates = static_cast<size_t>(std::max(dev.rate_cats, 1));
+    const size_t states = static_cast<size_t>(std::max(dev.states, 1));
+    const size_t clv_elems = mlipper::util::checked_product(
+        "local SPR lane CLVs", nodes, sites, rates, states);
+    const size_t pmat_elems = mlipper::util::checked_product(
+        "local SPR lane PMATs", nodes, rates, states, states);
+    const size_t scaler_per_node = dev.per_rate_scaling
+        ? mlipper::util::checked_mul_size(
+              sites, rates, "local SPR lane scaler stride")
+        : sites;
+
+    size_t bytes = 0;
+    const auto add = [&](size_t value, const char* label) {
+        bytes = mlipper::util::checked_add_size(bytes, value, label);
+    };
+    add(mlipper::util::checked_product(
+            "local SPR four CLV pools", sizeof(fp_t), clv_elems, 4),
+        "local SPR lane bytes");
+    add(mlipper::util::checked_product(
+            "local SPR four PMAT pools", sizeof(fp_t), pmat_elems, 4),
+        "local SPR lane bytes");
+    add(mlipper::util::checked_product(
+            "local SPR four scaler pools", sizeof(unsigned), nodes,
+            scaler_per_node, 4),
+        "local SPR lane bytes");
+    add(mlipper::util::checked_product(
+            "local SPR tip characters", sizeof(uint8_t), tips, sites),
+        "local SPR lane bytes");
+    add(mlipper::util::checked_allocation_bytes<int>(
+            tips, "local SPR tip node IDs"),
+        "local SPR lane bytes");
+    add(mlipper::util::checked_product(
+            "local SPR branch arrays", sizeof(fp_t), nodes, 5),
+        "local SPR lane bytes");
+
+    // Cover query buffers, traversal operations, placement scratch, allocator
+    // rounding, and small model arrays that are not part of the dominant pools.
+    add(bytes / 4, "local SPR lane safety overhead");
+    return std::max<size_t>(bytes, 1);
+}
+
+int choose_local_spr_scoring_lane_count(const DeviceTree& device)
+{
+    ensure_device_tree_current_device(
+        device, "choose_local_spr_scoring_lane_count");
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
+    CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
+    (void)total_bytes;
+
+    int cpu_limit = 8;
     if (const unsigned hw_threads = std::thread::hardware_concurrency()) {
-        lanes = std::min(lanes, static_cast<int>(hw_threads));
+        cpu_limit = std::min(cpu_limit, static_cast<int>(hw_threads));
     }
-    return std::max(1, lanes);
+    cpu_limit = std::max(1, cpu_limit);
+
+    const size_t lane_bytes = estimate_local_spr_scoring_lane_bytes(device);
+    constexpr size_t kMinimumHeadroomBytes = size_t{256} * 1024 * 1024;
+    // Ranking also owns a compact batch workspace. Reserve at least one
+    // lane-sized allocation for it, in addition to fixed CUDA headroom.
+    const size_t reserved_bytes = mlipper::util::checked_add_size(
+        kMinimumHeadroomBytes,
+        lane_bytes,
+        "local SPR GPU memory reserve");
+    if (free_bytes <= reserved_bytes || free_bytes - reserved_bytes < lane_bytes) {
+        throw std::runtime_error(
+            "Local SPR does not have enough free GPU memory for one scoring "
+            "lane plus the compact batch workspace and 256 MiB headroom: free=" +
+            std::to_string(free_bytes) + " estimated_lane=" +
+            std::to_string(lane_bytes) + " reserved=" +
+            std::to_string(reserved_bytes));
+    }
+
+    const size_t memory_limit = (free_bytes - reserved_bytes) / lane_bytes;
+    const int lanes = std::max(
+        1,
+        std::min(
+            cpu_limit,
+            memory_limit > static_cast<size_t>(std::numeric_limits<int>::max())
+                ? std::numeric_limits<int>::max()
+                : static_cast<int>(memory_limit)));
+    if (lanes < cpu_limit) {
+        std::cout << "Local SPR scoring lanes reduced from " << cpu_limit
+                  << " to " << lanes
+                  << " by the GPU memory budget (free=" << free_bytes
+                  << ", estimated_lane=" << lane_bytes
+                  << ", reserved=" << reserved_bytes << ").\n";
+    }
+    return lanes;
 }
 
 void release_local_spr_batch_scoring_workspace(
@@ -541,6 +667,7 @@ bool local_spr_scoring_lane_matches_context(
 void ensure_local_spr_ranking_workspace(
     const TopologyRefinementSearchContext& ctx,
     const TreeBuildResult& base_tree,
+    int scoring_lane_count,
     LocalSPRRankingWorkspace& workspace)
 {
     const bool direct_quartet_enabled =
@@ -548,7 +675,7 @@ void ensure_local_spr_ranking_workspace(
         ctx.per_rate_scaling;
     const int desired_lane_count = direct_quartet_enabled
         ? 0
-        : local_spr_scoring_lane_count();
+        : scoring_lane_count;
     constexpr int query_capacity = 1;
     const PlacementQueryBatch subtree_query_batch =
         build_local_spr_scoring_query_batch(ctx, query_capacity);
@@ -942,13 +1069,21 @@ LocalSPRPlacementPassResult run_local_spr_placement_pass(
     return pass_result;
 }
 
-double find_local_spr_baseline_loglikelihood(
+// Return the score obtained by attaching the pruned subtree back where it
+// started. Callers use this as the zero-gain reference for every candidate;
+// negative infinity means that the unchanged topology was not scored.
+double find_unchanged_topology_loglikelihood(
     const RawPlacementResult& placement_result,
+    const TreeBuildResult& pruned_tree,
     int baseline_target_id)
 {
+    const int baseline_edge_child_id =
+        canonical_unchanged_topology_edge_child(
+            pruned_tree,
+            baseline_target_id);
     for (const RawPlacementResult::RankedPlacement& placement :
          placement_result.top_placements) {
-        if (placement.target_id == baseline_target_id) {
+        if (placement.target_id == baseline_edge_child_id) {
             return placement.loglikelihood;
         }
     }
@@ -1196,12 +1331,10 @@ LocalSPRPruneRootEvaluationResult evaluate_local_spr_prune_root(
             nullptr);
     RawPlacementResult placement_result = std::move(inner_pass.placement_result);
 
-    const double baseline_logL =
-        (prune_info.grandparent_id >= 0)
-            ? find_local_spr_baseline_loglikelihood(
-                  placement_result,
-                  prune_info.sibling_id)
-            : -std::numeric_limits<double>::infinity();
+    const double baseline_logL = find_unchanged_topology_loglikelihood(
+        placement_result,
+        pruned_tree,
+        prune_info.sibling_id);
     if (!std::isfinite(baseline_logL)) {
         return result;
     }
@@ -1252,27 +1385,6 @@ void merge_local_spr_prune_root_evaluation(
             std::move(candidate),
             candidate_pool_limit);
     }
-}
-
-template <typename T>
-std::vector<T> collect_futures_or_rethrow(std::vector<std::future<T>>& futures)
-{
-    std::vector<T> results;
-    results.reserve(futures.size());
-    std::exception_ptr first_exception;
-    for (std::future<T>& future : futures) {
-        try {
-            results.push_back(future.get());
-        } catch (...) {
-            if (!first_exception) {
-                first_exception = std::current_exception();
-            }
-        }
-    }
-    if (first_exception) {
-        std::rethrow_exception(first_exception);
-    }
-    return results;
 }
 
 LocalSPRPreparedPruneRoot prepare_local_spr_prune_root_inner_context(
@@ -1364,6 +1476,9 @@ LocalSPRPreparedPruneRoot prepare_local_spr_prune_root_inner_context(
     return prepared;
 }
 
+// Pack candidate edge contexts from independent pruned trees into one compact
+// DeviceTree-shaped workspace. The compact IDs exist only for this launch;
+// results are split and remapped to each source topology before returning.
 std::vector<RawPlacementResult> score_local_spr_prepared_inner_batch(
     const TopologyRefinementSearchContext& ctx,
     const std::vector<LocalSPRPreparedPruneRoot>& prepared_roots,
@@ -1538,6 +1653,10 @@ std::vector<RawPlacementResult> score_local_spr_prepared_inner_batch(
     return split_results;
 }
 
+// Score NNI alternatives without materializing one pruned DeviceTree per root.
+// The resident source tree supplies upward/downward messages; compact target
+// contexts reconstruct the two affected edge environments and one batched
+// placement call returns scores that are remapped to each prune-root result.
 std::vector<LocalSPRPruneRootEvaluationResult> score_direct_nni_batch(
     const TopologyRefinementSearchContext& ctx,
     const TreeBuildResult& base_tree,
@@ -1685,8 +1804,8 @@ std::vector<LocalSPRPruneRootEvaluationResult> score_direct_nni_batch(
         const TreeNode& central_child = base_tree.nodes[static_cast<size_t>(u)];
         const int b = central_child.left == item.prune_root_id
             ? central_child.right : central_child.left;
-        const double baseline = find_local_spr_baseline_loglikelihood(
-            per_root[local_idx], b);
+        const double baseline = find_unchanged_topology_loglikelihood(
+            per_root[local_idx], base_tree, b);
         if (!std::isfinite(baseline)) continue;
         append_positive_gain_local_spr_candidates(
             per_root[local_idx],
@@ -1703,6 +1822,9 @@ std::vector<LocalSPRPruneRootEvaluationResult> score_direct_nni_batch(
     return results;
 }
 
+// Dispatch one contiguous work range through the specialized direct-NNI path
+// or the general per-lane SPR path. Both branches merge results through the
+// same deterministic per-unit top-k and accounting contract.
 void evaluate_local_spr_work_range_batched_inner(
     const TopologyRefinementSearchContext& ctx,
     const TreeBuildResult& base_tree,
@@ -1715,7 +1837,7 @@ void evaluate_local_spr_work_range_batched_inner(
     int outer_seed_limit,
     int candidate_pool_limit,
     std::vector<LocalSPRScoringLane>& scoring_lanes,
-    FixedThreadPool& worker_pool,
+    tbb::task_arena& task_arena,
     LocalSPRBatchScoringWorkspace& batch_workspace,
     std::vector<LocalSPRCandidateMove>& unit_topk,
     LocalSPRSearchSummary& search_summary)
@@ -1771,34 +1893,28 @@ void evaluate_local_spr_work_range_batched_inner(
             continue;
         }
 
-        std::vector<std::future<LocalSPRPreparedPruneRoot>> futures;
-        futures.reserve(batch_size);
-        for (size_t lane_idx = 0; lane_idx < batch_size; ++lane_idx) {
-            const size_t item_idx = batch_begin + lane_idx;
-            futures.emplace_back(
-                worker_pool.submit([&, lane_idx, item_idx]() {
-                    LocalSPRScoringLane& lane = scoring_lanes[lane_idx];
-                    ensure_local_spr_scoring_lane_current_device(
-                        lane,
-                        "evaluate_local_spr_work_range_batched_inner");
-                    TopologyRefinementSearchContext lane_ctx = ctx;
-                    lane_ctx.stream = lane.stream;
-                    LocalSPRPreparedPruneRoot prepared =
-                        prepare_local_spr_prune_root_inner_context(
-                            lane_ctx,
-                            base_tree,
-                            work_items[item_idx],
-                            static_cast<int>(lane_idx),
-                            lane.workspace);
-                    if (prepared.valid) {
-                        CUDA_CHECK(cudaEventRecord(lane.ready_event, lane.stream));
-                    }
-                    return prepared;
-                }));
-        }
-
-        std::vector<LocalSPRPreparedPruneRoot> prepared_roots =
-            collect_futures_or_rethrow(futures);
+        std::vector<LocalSPRPreparedPruneRoot> prepared_roots(batch_size);
+        task_arena.execute([&]() {
+            tbb::parallel_for(size_t{0}, batch_size, [&](size_t lane_idx) {
+                const size_t item_idx = batch_begin + lane_idx;
+                LocalSPRScoringLane& lane = scoring_lanes[lane_idx];
+                ensure_local_spr_scoring_lane_current_device(
+                    lane,
+                    "evaluate_local_spr_work_range_batched_inner");
+                TopologyRefinementSearchContext lane_ctx = ctx;
+                lane_ctx.stream = lane.stream;
+                prepared_roots[lane_idx] =
+                    prepare_local_spr_prune_root_inner_context(
+                        lane_ctx,
+                        base_tree,
+                        work_items[item_idx],
+                        static_cast<int>(lane_idx),
+                        lane.workspace);
+                if (prepared_roots[lane_idx].valid) {
+                    CUDA_CHECK(cudaEventRecord(lane.ready_event, lane.stream));
+                }
+            });
+        });
 
         std::vector<RawPlacementResult> inner_results =
             score_local_spr_prepared_inner_batch(
@@ -1822,12 +1938,10 @@ void evaluate_local_spr_work_range_batched_inner(
 
             RawPlacementResult placement_result =
                 std::move(inner_results[batch_idx]);
-            const double baseline_logL =
-                (prepared.prune_info.grandparent_id >= 0)
-                    ? find_local_spr_baseline_loglikelihood(
-                          placement_result,
-                          prepared.prune_info.sibling_id)
-                    : -std::numeric_limits<double>::infinity();
+            const double baseline_logL = find_unchanged_topology_loglikelihood(
+                placement_result,
+                prepared.pruned_tree,
+                prepared.prune_info.sibling_id);
             if (!std::isfinite(baseline_logL)) {
                 merge_local_spr_prune_root_evaluation(
                     std::move(evaluation),
@@ -1880,12 +1994,17 @@ void evaluate_local_spr_work_range_batched_inner(
     }
 }
 
+// Execute one complete candidate-search stage. CPU work first enumerates legal
+// prune roots and inner-radius edges per repair unit. GPU lanes then score those
+// edges in batches; promising seeds may expand to the outer radius. Only each
+// unit's deterministic top-k survives into the globally ranked result.
 std::vector<LocalSPRCandidateMove> rank_local_spr_candidates(
     const TopologyRefinementSearchContext& ctx,
     const TreeBuildResult& base_tree,
     const std::vector<LocalSPRRepairUnit>& repair_units,
     LocalSPRRankingWorkspace& ranking_workspace,
-    FixedThreadPool& worker_pool,
+    tbb::task_arena& task_arena,
+    int scoring_lane_count,
     LocalSPRSearchSummary& search_summary)
 {
     std::vector<LocalSPRCandidateMove> ranked_candidates;
@@ -1893,6 +2012,7 @@ std::vector<LocalSPRCandidateMove> rank_local_spr_candidates(
     ensure_local_spr_ranking_workspace(
         ctx,
         base_tree,
+        scoring_lane_count,
         ranking_workspace);
     std::vector<LocalSPRScoringLane>& scoring_lanes =
         ranking_workspace.scoring_lanes;
@@ -1904,20 +2024,19 @@ std::vector<LocalSPRCandidateMove> rank_local_spr_candidates(
         ctx.radius > inner_search_radius;
     const int local_spr_candidate_pool_limit = ctx.topk_per_unit;
     const int local_spr_outer_seed_limit = ctx.topk_per_unit;
-    std::vector<std::future<std::vector<LocalSPRPruneRootWorkItem>>> unit_work_futures;
-    unit_work_futures.reserve(repair_units.size());
-    for (size_t unit_idx = 0; unit_idx < repair_units.size(); ++unit_idx) {
-        unit_work_futures.emplace_back(
-            worker_pool.submit([&, unit_idx]() {
-                return prepare_local_spr_unit_work_items(
-                    base_tree,
-                    repair_units[unit_idx],
-                    inner_search_radius,
-                    ctx);
-            }));
-    }
-    std::vector<std::vector<LocalSPRPruneRootWorkItem>> prepared_unit_work_items =
-        collect_futures_or_rethrow(unit_work_futures);
+    std::vector<std::vector<LocalSPRPruneRootWorkItem>>
+        prepared_unit_work_items(repair_units.size());
+    task_arena.execute([&]() {
+        tbb::parallel_for(
+            size_t{0}, repair_units.size(), [&](size_t unit_idx) {
+                prepared_unit_work_items[unit_idx] =
+                    prepare_local_spr_unit_work_items(
+                        base_tree,
+                        repair_units[unit_idx],
+                        inner_search_radius,
+                        ctx);
+            });
+    });
     if (ctx.move_type != mlipper::TopologyMoveType::NNI &&
         !ctx.forbidden_regraft_node_ids.empty()) {
         for (auto& unit_items : prepared_unit_work_items) {
@@ -1987,7 +2106,7 @@ std::vector<LocalSPRCandidateMove> rank_local_spr_candidates(
                 local_spr_outer_seed_limit,
                 local_spr_candidate_pool_limit,
                 scoring_lanes,
-                worker_pool,
+                task_arena,
                 batch_scoring_workspace,
                 unit_topk,
                 search_summary);

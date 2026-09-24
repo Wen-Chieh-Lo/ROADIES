@@ -7,6 +7,10 @@ optimizer. It was recorded on 2026-07-31.
 Status: historical performance evidence. The measurements explain past design
 decisions; they are not current performance guarantees or setup instructions.
 
+Terminology note: this report uses the historical name `mid_base` for the
+parent-side edge message. Current code calls this the edge-outside message and
+stores it in `d_edge_outside_clv`; there is no separate `mid_base` buffer.
+
 ## Benchmark configuration
 
 | Property | Value |
@@ -42,8 +46,7 @@ and the unprofiled runs should be used for end-to-end timing.
 | Root likelihood | 4 | 0.0002 s | <0.1% |
 | **Total GPU kernel time** |  | **1.5158 s** | **100%** |
 
-Unprofiled one-sweep BLO time: **1.5161 s**.  
-Unprofiled one-sweep wall time: **1.94 s**.
+Unprofiled one-sweep BLO time was **1.5161 s**, and wall time was **1.94 s**.
 
 ### Version 2: eight-block branch Newton, full post-update downward refresh
 
@@ -57,8 +60,7 @@ Unprofiled one-sweep wall time: **1.94 s**.
 | Root likelihood | 4 | 0.0002 s | <0.1% |
 | **Total GPU kernel time** |  | **0.8352 s** | **100%** |
 
-Unprofiled one-sweep BLO time: **0.8041 s**.  
-Unprofiled one-sweep wall time: **1.21 s**.
+Unprofiled one-sweep BLO time was **0.8041 s**, and wall time was **1.21 s**.
 
 The multi-block Newton kernel reduced its own GPU time by **3.18x**, while the
 complete BLO sweep improved by about **1.89x**. The full downward refresh then
@@ -77,8 +79,7 @@ became the largest operation.
 | Root likelihood | 4 | 0.0002 s | <0.1% |
 | **Total GPU kernel time** |  | **0.6948 s** | **100%** |
 
-Unprofiled one-sweep BLO time: **0.6771 s**.  
-Unprofiled one-sweep wall time: **1.11 s**.
+Unprofiled one-sweep BLO time was **0.6771 s**, and wall time was **1.11 s**.
 
 The incremental update skips the post-update downward message for tip edges and
 reapplies only the accepted edge PMAT to cached `mid_base` for internal edges.
@@ -100,8 +101,7 @@ branch instead of the previous eight-block grid.
 | Root likelihood | 4 | 0.0002 s | <0.1% |
 | **Total GPU kernel time** |  | **0.5624 s** | **100%** |
 
-Unprofiled one-sweep BLO time: **0.5513 s**.  
-Unprofiled one-sweep wall time: **1.00 s**.
+Unprofiled one-sweep BLO time was **0.5513 s**, and wall time was **1.00 s**.
 
 The warp-site function reduces Newton GPU time from `0.3136 s` to `0.1803 s`
 (**1.74x**) without changing the one-sweep or converged likelihood.
@@ -127,8 +127,7 @@ affected child-down or parent-up message. Each specialized kernel assigns the
 | Root likelihood | 4 | 0.0002 s | <0.1% |
 | **Total GPU kernel time** |  | **0.3394 s** | **100%** |
 
-Unprofiled one-sweep BLO time: **0.3339 s**.  
-Unprofiled one-sweep wall time: **0.77 s**.
+Unprofiled one-sweep BLO time was **0.3339 s**, and wall time was **0.77 s**.
 
 The branch-local CLV kernels reduce the one-sweep BLO time from `0.5513 s` to
 `0.3339 s` (**1.65x**) without changing its likelihood

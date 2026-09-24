@@ -5,6 +5,12 @@
 
 namespace mlipper::likelihood::partials {
 
+// CLVs are laid out as [node][site][rate][state]. Upward values summarize a
+// node's descendants; downward values summarize the complementary side of the
+// tree. Scaling exponents follow the same site/rate policy as their CLV and
+// must be inherited whenever two messages are multiplied. The specialized DNA
+// paths below preserve this contract while using fp4 vector operations.
+
 __device__ __forceinline__ unsigned int* scaler_ptr_for_pool(
     const DeviceTree& D,
     uint8_t clv_pool,
@@ -1870,7 +1876,7 @@ __device__ __forceinline__ fp_t warp_site_rate_max(
 // The warp kernels specialize the common DNA4/four-rate layout. Each 16-lane
 // group owns one site, with four consecutive state lanes per rate category;
 // reductions and scaler updates must therefore remain confined to each group.
-__global__ void BuildTreeMidBaseWarpSiteKernel(
+__global__ void BuildTreeEdgeOutsideWarpSiteKernel(
     const DeviceTree D,
     const NodeOpInfo* op_ptr)
 {

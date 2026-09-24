@@ -33,7 +33,7 @@ Options:
 Notes:
   - All workers in one test invocation share the same MLIPPER_GPU_LOCK_DIR.
   - To force visible contention, set --workers greater than the number of visible GPUs.
-  - The script does not use Docker and does not use run_single_gene_MLIPPER.sh.
+  - The script invokes the local MLIPPER binary directly and does not use Docker.
 EOF
 }
 

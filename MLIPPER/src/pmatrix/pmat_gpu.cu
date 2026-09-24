@@ -44,7 +44,7 @@ __global__ void build_all_branch_pmats_kernel(
     const int rate_id = item - node_id * rate_categories;
     const size_t matrix_elems =
         static_cast<size_t>(state_count) * state_count;
-    pmatrix_from_triple_device(
+    pmatrix_from_triple_gpu(
         inverse_eigenvectors,
         eigenvectors,
         rate_eigenvalues +
@@ -110,7 +110,7 @@ __global__ void build_single_branch_pmat_kernel(
 
 } // namespace
 
-__device__ void pmatrix_from_triple_device(
+__device__ void pmatrix_from_triple_gpu(
     const fp_t* Vinv,
     const fp_t* V,
     const fp_t* rate_eigenvalues,
@@ -165,7 +165,7 @@ __device__ void pmatrix_from_triple_device(
     }
 }
 
-void build_all_branch_pmats_device(
+void build_all_branch_pmats_gpu(
     int node_count,
     int state_count,
     int rate_categories,
@@ -199,7 +199,7 @@ void build_all_branch_pmats_device(
         d_rate_eigenvalues, d_pmats);
 }
 
-void build_single_branch_pmat_device(
+void build_single_branch_pmat_gpu(
     int node_id,
     int state_count,
     int rate_categories,

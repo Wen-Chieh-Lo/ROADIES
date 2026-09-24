@@ -14,6 +14,8 @@ struct BestModelConfig {
     bool empirical_freqs = false;
 };
 
+// Parse the supported RAxML-NG bestModel subset. empirical_freqs records +FC;
+// unsupported rate heterogeneity, mixtures, or invariant sites are rejected.
 BestModelConfig parse_best_model_file(const std::filesystem::path& path);
 
 // Gamma categories are normalized to mean one; their mixture weights are
@@ -27,6 +29,8 @@ std::vector<double> estimate_empirical_pi(
     const parse::Alignment& alignment,
     int states,
     const std::vector<unsigned>& pattern_weights = {});
+// Validate positivity/finite values, apply the supported state dimension, and
+// return frequencies normalized to sum exactly one within floating precision.
 std::vector<double> ensure_normalized_pi(std::vector<double> pi, int states);
 
 } // namespace model

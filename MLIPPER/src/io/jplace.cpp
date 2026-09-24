@@ -115,6 +115,9 @@ void append_jplace_row(
     record.rows.push_back(row);
 }
 
+// Serialize recursively and assign edge numbers after each child subtree. The
+// node-to-edge table is the authoritative mapping later used for placement
+// rows; callers must never assume a TreeBuildResult node ID is a jplace edge.
 std::string emit_jplace_tree_node(
     const TreeBuildResult& tree,
     JplaceTreeExport& tree_export,
@@ -152,6 +155,9 @@ std::string emit_jplace_tree_node(
     return out.str();
 }
 
+// Flatten only the zero-length helper edge introduced when an unrooted binary
+// tree was represented with a degree-two root. This keeps the exported edge set
+// aligned with the biological unrooted tree used for placement interpretation.
 JplaceTreeExport build_jplace_tree_export(const TreeBuildResult& tree) {
     mlipper::treeio::validate_tree_for_output(tree);
 

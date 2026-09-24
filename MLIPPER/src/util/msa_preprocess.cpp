@@ -10,6 +10,8 @@
 
 #include "util/msa_preprocess.hpp"
 
+// Keep reference and query columns coupled throughout compression: placement
+// likelihood is preserved only when a duplicate pattern matches on both sides.
 PreprocessedAlignments preprocess_alignments(
     const parse::Alignment& tree_alignment,
     const parse::Alignment& query_alignment)

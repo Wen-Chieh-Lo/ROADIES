@@ -1800,7 +1800,6 @@ void MlipperSession::runSmallTipBatches(
     initializeGPU(effective_params, gpu_config);
 
     const MlipperGpuConfig recycle_gpu_config{};
-    LocalSPRPersistentWorkspace persistent_workspace;
     for (int batch_start = 0;
          batch_start < total_queries;
          batch_start += batch_size) {
@@ -1817,8 +1816,7 @@ void MlipperSession::runSmallTipBatches(
         if (effective_params.local_spr) {
             runLocalSPR(
                 local_spr_params,
-                committed,
-                &persistent_workspace);
+                committed);
         }
         if (batch_end < total_queries) {
             // The current resident allocation reserves one batch of insertion
@@ -1885,7 +1883,6 @@ void MlipperSession::rebuildCpuTreeFromCurrentTopology()
 void MlipperSession::runTopologyRefinement(
     const TopologyRefinementParams& params,
     const std::vector<divide_and_conquer::TreeEdgeEndpoints>& anchors,
-    LocalSPRPersistentWorkspace* persistent_workspace,
     TopologyMoveType move_type,
     const std::vector<NNIOwnedSplit>& owned_nni_splits)
 {
@@ -2044,7 +2041,6 @@ void MlipperSession::runTopologyRefinement(
     refinement_ctx.cluster_threshold = params.cluster_threshold;
     refinement_ctx.topk_per_unit = params.topk_per_unit;
     refinement_ctx.rounds = params.rounds;
-    refinement_ctx.persistent_workspace = persistent_workspace;
     refinement_ctx.move_type = move_type;
     refinement_ctx.symmetric_branch_sweeps =
         gpu_mode_ == GpuMode::DivideAndConquer ? 1 : 0;
@@ -2168,8 +2164,7 @@ void MlipperSession::runTopologyRefinement(
 
 void MlipperSession::runLocalSPR(
     const MlipperLocalSPRParams& params,
-    const std::vector<PlacementResult>& recent_committed_placements,
-    LocalSPRPersistentWorkspace* persistent_workspace)
+    const std::vector<PlacementResult>& recent_committed_placements)
 {
     const TopologyRefinementParams refinement_params{
         params.local_spr_radius,
@@ -2184,7 +2179,6 @@ void MlipperSession::runLocalSPR(
     runTopologyRefinement(
         refinement_params,
         anchors,
-        persistent_workspace,
         TopologyMoveType::SPR,
         {});
 }
@@ -2208,7 +2202,6 @@ void MlipperSession::runSectorNNI(
     runTopologyRefinement(
         refinement_params,
         {},
-        nullptr,
         TopologyMoveType::NNI,
         owned_splits);
 }
@@ -2889,7 +2882,7 @@ void MlipperSession::initializeDivideAndConquerGPU(
     initializeDivideAndConquerGPUImpl(params, gpu_config, nullptr);
 }
 
-void MlipperSession::initializeDivideAndConquerGPUWithReservation(
+void MlipperSession::initializeDivideAndConquerGPU(
     const MlipperDivideAndConquerParams& params,
     gpu::DeviceReservation reservation)
 {

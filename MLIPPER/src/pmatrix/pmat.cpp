@@ -18,6 +18,9 @@ void dsyevd_(char* jobz, char* uplo, int* n,
 
 namespace {
 
+// Remove only roundoff-scale negative probabilities, then repair row sums.
+// Materially negative values are retained so upstream numerical defects are
+// not silently converted into plausible transition matrices.
 void clamp_neg_and_row_norm(double* p, int n) {
     for (int row = 0; row < n; ++row) {
         double sum = 0.0;
@@ -52,6 +55,8 @@ void pmatrix_from_triple(
     std::vector<double> I(matrix_elems, 0.0);
     for (int i = 0; i < n; ++i) I[i * n + i] = 1.0;
 
+    // Compute V*(exp(Lrt)-I)*V^-1 and add I afterward. expm1 preserves small
+    // branch changes that would lose precision in exp(x)-1.
     std::vector<double> D(matrix_elems, 0.0);
     for (int j = 0; j < n; ++j) D[j * n + j] = std::expm1(lamb[j] * r * t);
 

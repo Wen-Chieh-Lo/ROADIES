@@ -18,7 +18,6 @@
 #include "tree/divide_and_conquer.hpp"
 #include "tree/tree.hpp"
 
-struct LocalSPRPersistentWorkspace;
 struct LocalSPRSessionWorkspaceSet;
 
 namespace mlipper {
@@ -142,7 +141,11 @@ public:
     void initializeDivideAndConquerGPU(
         const MlipperDivideAndConquerParams& params,
         const MlipperGpuConfig& gpu_config = {});
-    void initializeDivideAndConquerGPUWithReservation(
+    // Initialize on a device reserved before the session's GPU setup. The
+    // reservation is passed by value and its ownership moves into this session,
+    // keeping the same admission entry alive for the session lifetime. D&C uses
+    // this overload after DIPPER has built its starting tree on that device.
+    void initializeDivideAndConquerGPU(
         const MlipperDivideAndConquerParams& params,
         gpu::DeviceReservation reservation);
 
@@ -203,12 +206,10 @@ private:
         const std::vector<SequenceRecord>& queries);
     void runLocalSPR(
         const MlipperLocalSPRParams& params,
-        const std::vector<PlacementResult>& recent_committed_placements,
-        LocalSPRPersistentWorkspace* persistent_workspace = nullptr);
+        const std::vector<PlacementResult>& recent_committed_placements);
     void runTopologyRefinement(
         const TopologyRefinementParams& params,
         const std::vector<divide_and_conquer::TreeEdgeEndpoints>& anchors,
-        LocalSPRPersistentWorkspace* persistent_workspace,
         TopologyMoveType move_type,
         const std::vector<NNIOwnedSplit>& owned_nni_splits);
 

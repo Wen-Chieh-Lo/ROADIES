@@ -4,6 +4,8 @@ namespace mlipper {
 
 namespace optimization::model_parameters {
 
+// Bounds keep the GTR parameterization away from singular zero/infinite ratios.
+// Acceptance tolerances are log-likelihood deltas, not relative errors.
 inline constexpr double kMinimumRateRatio = 1.0e-3;
 inline constexpr double kMaximumRateRatio = 1000.0;
 inline constexpr double kMinimumFrequencyRatio = 1.0e-3;
@@ -19,6 +21,9 @@ inline constexpr double kLikelihoodDecreaseTolerance = 1.0e-8;
 
 namespace optimization::branch_lengths {
 
+// Branch lengths are expected substitutions per site. Placement uses a larger
+// floor for newly inserted edges; topology refinement may collapse internal
+// edges down to kTreeMinimumLength.
 inline constexpr double kPlacementMinimumLength = 1.0e-4;
 inline constexpr double kTreeMinimumLength = 1.0e-6;
 inline constexpr double kMaximumLength = 100.0;
@@ -31,21 +36,27 @@ inline constexpr double kLengthChangeTolerance = 1.0e-12;
 
 } // namespace optimization::branch_lengths
 
+// Jacobi scores a group from one frozen likelihood state; Sequential commits
+// each accepted coordinate before scoring the next one.
 enum class EdgeUpdateScheme {
     Jacobi,
     Sequential,
 };
 
+// Selects whether an optimization rebuild may retain immutable tip CLVs.
 enum class ClvRetention {
     RebuildAll,
     PreserveTips,
 };
 
+// Controls whether a proposal is audited on its local subtree or against the
+// complete resident tree likelihood.
 enum class AcceptanceScope {
     LocalSubtree,
     FullTree,
 };
 
+// Shared control surface for resident branch-length optimizers.
 struct BranchOptimizationOptions {
     int sweeps = 8;
     int newton_iterations = 30;

@@ -25,6 +25,12 @@ using mlipper::optimization::branch_lengths::kMaximumLength;
 using mlipper::optimization::branch_lengths::kNewtonTolerance;
 using mlipper::optimization::branch_lengths::kTreeMinimumLength;
 
+// Branch optimization builds a sumtable from the two likelihood messages on
+// an edge. That table is independent of the trial branch length, so Newton
+// iterations vary only exp(lambda*t) and its first two derivatives. Placement
+// kernels apply the same mechanism separately to pendant and proximal
+// coordinates; full-tree kernels update existing child edges.
+
 static __device__ __forceinline__ unsigned int threshold_scale_shift(fp_t max_val)
 {
     const fp_t scale_threshold = fp_ldexp(fp_t(1), kClvScaleThresholdExponent);
@@ -949,6 +955,11 @@ fp_t load_pattern_weight_cached(
         : fp_t(1);
 }
 
+// Evaluate one site's first and second derivatives of negative log likelihood
+// with respect to the target edge length. Upward and outside messages are
+// projected into eigen space, combined with exp(lambda*t) derivatives, aligned
+// to a common scaler exponent across rate categories, and mixed with optional
+// invariant-site mass. Outputs already include the compressed pattern weight.
 static __device__ __forceinline__
 void evaluate_tree_edge_site_derivatives_direct(
     const DeviceTree D,
@@ -1931,6 +1942,10 @@ __global__ void LikelihoodDerivativeProximalKernel(
     }
 }
 
+// Propose every selected edge from the same frozen CLV/outside-message state.
+// One block owns one child-endpoint edge and reduces weighted site derivatives;
+// proposals are written separately so host code can accept or roll back the
+// complete Jacobi group transactionally.
 __global__ void TreeEdgeJacobiBranchLengthKernel(
     const DeviceTree D,
     const int* __restrict__ invariant_site,
@@ -2994,7 +3009,7 @@ RunAcceptedFullTreeSequentialBranchLengthOptimization(
                     throw std::runtime_error(
                         "resident sequential BLO is missing a downward operation");
                 }
-                BuildSingleTreeMidBaseWarpSitePrepared(
+                BuildSingleTreeEdgeOutsideWarpSitePrepared(
                     optimization_device, prepared_downward, down_op, stream);
                 if (child_id != artificial_root_child) {
                     OptimizeSingleTreeEdgeFromCurrentClvsWarpSite(
@@ -3002,7 +3017,7 @@ RunAcceptedFullTreeSequentialBranchLengthOptimization(
                         sumtable.get(), gradient.get(), hessian.get(),
                         newton_state.get(), newton_failure.get(),
                         result.newton_iterations, stream);
-                    build_single_branch_pmat_device(
+                    build_single_branch_pmat_gpu(
                         child_id,
                         optimization_device.states,
                         optimization_device.rate_cats,

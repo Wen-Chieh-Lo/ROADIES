@@ -309,6 +309,10 @@ std::vector<int> multi_source_bfs_distances(
     return neighborhood::multi_source_bfs_distances(tree, source_mask);
 }
 
+// Planning keeps global IDs until the complete connected region is known. The
+// dense path favors small trees; the sparse path avoids repeatedly scanning a
+// whole large backbone for a small sector. Both preserve the same tip-budget
+// and complete-BFS-level semantics.
 SubtreePlan build_subtree_plan_from_anchors(
     const TreeBuildResult& tree,
     const std::vector<TreeEdgeEndpoints>& anchors,
@@ -726,6 +730,10 @@ static int append_directional_boundary(
     return boundary.id;
 }
 
+// Convert a connected global plan into a self-contained local likelihood tree.
+// Every cut edge gains a virtual tip. Its sequence is structural padding while
+// boundary_ports instruct the GPU setup to replace that tip contribution with
+// the directional CLV copied from the omitted full-tree component.
 static PreparedDirectionalSubtree prepare_directional_subtree_with_boundaries(
     const TreeBuildResult& tree,
     const SubtreePlan& plan,

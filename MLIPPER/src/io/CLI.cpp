@@ -192,6 +192,10 @@ struct SmallTipCliArgs {
 
 } // namespace
 
+// The loader is intentionally a front-loaded boundary: token parsing,
+// cross-option checks, filesystem loading, model resolution, biological input
+// validation, and site-pattern compression all finish before should_run=true.
+// The session layer can therefore assume SmallTipConfig is execution-ready.
 SmallTipParseResult loadSmallTipConfigFromCommandLine(
     int argc,
     char** argv,
@@ -715,6 +719,8 @@ DivideAndConquerConfig build_divide_and_conquer_config(
 
 } // namespace
 
+// D&C follows the same execution-ready contract as the small-tip loader, but
+// retains one combined alignment because DIPPER constructs the initial tree.
 DivideAndConquerParseResult loadDivideAndConquerConfigFromCommandLine(
     int argc,
     char** argv,

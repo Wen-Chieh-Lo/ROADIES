@@ -14,6 +14,8 @@ enum class WorkflowKind {
     DivideAndConquer,
 };
 
+// Inspect only the workflow selector; full parsing and file I/O are deferred to
+// the matching loader so the two option sets remain independent.
 WorkflowKind selectWorkflow(int argc, char** argv);
 
 struct SmallTipConfig {
@@ -35,10 +37,14 @@ struct SmallTipConfig {
 
 struct SmallTipParseResult {
     SmallTipConfig config;
+    // False represents a handled non-run outcome such as --help. exit_code is
+    // the value main should return in that case.
     bool should_run = false;
     int exit_code = 0;
 };
 
+// Parse, validate, load files, and compress site patterns. Relative paths are
+// resolved against config_base rather than the process's later working state.
 SmallTipParseResult loadSmallTipConfigFromCommandLine(
     int argc,
     char** argv,
@@ -62,10 +68,13 @@ struct DivideAndConquerConfig {
 
 struct DivideAndConquerParseResult {
     DivideAndConquerConfig config;
+    // Uses the same handled-help convention as SmallTipParseResult.
     bool should_run = false;
     int exit_code = 0;
 };
 
+// Load one full alignment and model for topology construction. Unlike the
+// small-tip loader, this path has no query alignment or backbone tree.
 DivideAndConquerParseResult loadDivideAndConquerConfigFromCommandLine(
     int argc,
     char** argv,

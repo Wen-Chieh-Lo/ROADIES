@@ -36,6 +36,11 @@ __pycache__/
 /*.jplace
 *.tar.gz
 
-# Local datasets stay out of git by default.
+# Local data and generated outputs stay out of git by default. Keep only the
+# documented representative datasets in version control.
 /data/*
-/data
+!/data/README.md
+!/data/small_tip/
+!/data/small_tip/**
+!/data/divide_and_conquer/
+!/data/divide_and_conquer/**

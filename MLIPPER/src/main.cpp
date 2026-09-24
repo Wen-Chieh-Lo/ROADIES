@@ -52,7 +52,7 @@ int runDivideAndConquerWorkflow(
         config.model,
         config.model_uses_empirical_freqs);
     session.initializeCPU();
-    session.initializeDivideAndConquerGPUWithReservation(
+    session.initializeDivideAndConquerGPU(
         config.params,
         std::move(gpu_reservation));
 

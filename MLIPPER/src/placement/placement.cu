@@ -969,7 +969,7 @@ __global__ void BuildPendantPMATPerOpKernel(
     const size_t matrix_span = state_count * state_count;
     const fp_t* rate_lambdas = lambdas + rate_offset;
     fp_t* out_pmat = P + static_cast<size_t>(flat_index) * matrix_span;
-    pmatrix_from_triple_device(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
+    pmatrix_from_triple_gpu(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
 }
 
 // Build proximal PMATs for every node from the current proximal branch lengths.
@@ -1014,7 +1014,7 @@ __global__ void BuildNodeProximalPMATKernel(
         (static_cast<size_t>(node_idx) * rate_count + static_cast<size_t>(rate_idx)) * matrix_span;
     const fp_t* rate_lambdas = lambdas + rate_offset;
     fp_t* out_pmat = P + output_base;
-    pmatrix_from_triple_device(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
+    pmatrix_from_triple_gpu(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
 }
 
 // Build distal PMATs for every node from total branch length minus proximal length.
@@ -1058,7 +1058,7 @@ __global__ void BuildNodeDistalPMATKernel(
         (static_cast<size_t>(node_idx) * rate_count + static_cast<size_t>(rate_idx)) * matrix_span;
     const fp_t* rate_lambdas = lambdas + rate_offset;
     fp_t* out_pmat = P + output_base;
-    pmatrix_from_triple_device(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
+    pmatrix_from_triple_gpu(Vinv, V, rate_lambdas, fp_t(1.0), branch_length, p, out_pmat, states);
 }
 
 // Placement is deliberately split into device-side scoring/optimization and

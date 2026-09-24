@@ -592,6 +592,11 @@ void copy_selected_upward_state(
     CUDA_CHECK(cudaGetLastError());
 }
 
+// Populate compact NNI scoring targets from resident full-tree state. Each
+// block-row handles one mapping and each thread handles one site. The target
+// upward CLV is copied directly; the edge-outside CLV either takes the cached
+// fast path or is reconstructed from parent-down and sibling-up messages while
+// preserving the source scaler convention.
 __global__ void BuildDirectNNITargetContextsKernel(
     DeviceTree src,
     DeviceTree dst,
@@ -628,9 +633,9 @@ __global__ void BuildDirectNNITargetContextsKernel(
 
     const size_t dst_edge_outside = static_cast<size_t>(op.dst_target) * dst_node_span + site * per_site;
     const size_t dst_mid_scaler = static_cast<size_t>(op.dst_target) * scaler_span;
-    if (op.direct_midbase_src >= 0) {
-        const size_t source_base = static_cast<size_t>(op.direct_midbase_src) * src_node_span + site * per_site;
-        const size_t source_scaler = static_cast<size_t>(op.direct_midbase_src) * scaler_span;
+    if (op.direct_edge_outside_src >= 0) {
+        const size_t source_base = static_cast<size_t>(op.direct_edge_outside_src) * src_node_span + site * per_site;
+        const size_t source_scaler = static_cast<size_t>(op.direct_edge_outside_src) * scaler_span;
         for (size_t elem = 0; elem < per_site; ++elem)
             dst.d_edge_outside_clv[dst_edge_outside + elem] = src.d_edge_outside_clv[source_base + elem];
         if (src.per_rate_scaling) {
@@ -835,6 +840,12 @@ void OwnedDeviceTree::reset() noexcept
     release_device_tree_buffers(*this);
 }
 
+// Materialize the complete resident likelihood state in four phases: validate
+// host dimensions, compute capacities/strides, allocate every owned buffer,
+// then upload immutable model/topology/alignment data. Construction uses a
+// temporary owner so a partial CUDA failure cannot leak or publish half-built
+// state. CLV and scaler fields inside DeviceTree are borrowed slices of the
+// larger allocations released by OwnedDeviceTree::reset().
 void allocate_device_tree_on_current_gpu(
     OwnedDeviceTree& target,
     const TreeBuildResult& T,
@@ -2216,7 +2227,7 @@ void UpdateTreeClvsDownwardOnlyPrepared(
         stream);
 }
 
-void BuildSingleTreeMidBaseWarpSitePrepared(
+void BuildSingleTreeEdgeOutsideWarpSitePrepared(
     DeviceTree& D,
     PlacementOpBuffer& prepared_downward_ops,
     int operation_index,
@@ -2225,7 +2236,7 @@ void BuildSingleTreeMidBaseWarpSitePrepared(
     if (!prepared_downward_ops.d_ops || operation_index < 0 ||
         operation_index >= prepared_downward_ops.num_ops) {
         throw std::runtime_error(
-            "BuildSingleTreeMidBaseWarpSitePrepared: invalid operation index");
+            "BuildSingleTreeEdgeOutsideWarpSitePrepared: invalid operation index");
     }
     if (!supports_dna_g4_fast_path(D)) {
         constexpr int kGenericBlockSize = 256;
@@ -2241,7 +2252,7 @@ void BuildSingleTreeMidBaseWarpSitePrepared(
     constexpr int kComponentsPerSite = 16;
     const unsigned int grid_x = static_cast<unsigned int>(std::max<size_t>(
         1, (D.sites * kComponentsPerSite + kBlockSize - 1) / kBlockSize));
-    mlipper::likelihood::partials::BuildTreeMidBaseWarpSiteKernel
+    mlipper::likelihood::partials::BuildTreeEdgeOutsideWarpSiteKernel
         <<<dim3(grid_x, 1), kBlockSize, 64 * sizeof(fp_t), stream>>>(
             D, prepared_downward_ops.d_ops + operation_index);
     CUDA_CHECK(cudaGetLastError());

@@ -36,7 +36,7 @@ __global__ void UpdatePartialsDownwardLevelKernel(
 
 // DNA+G4 single-operation kernels. Sixteen lanes cooperate on each site,
 // exposing one lane per rate/output-state component.
-__global__ void BuildTreeMidBaseWarpSiteKernel(
+__global__ void BuildTreeEdgeOutsideWarpSiteKernel(
     const DeviceTree D,
     const NodeOpInfo* op);
 __global__ void UpdateTreeUpwardWarpSiteKernel(

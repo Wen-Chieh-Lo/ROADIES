@@ -13,11 +13,16 @@ namespace mlipper {
 
 namespace model_optimization {
 
+// The two workspace kinds have different dominant per-site buffers and are
+// budgeted separately when an alignment must be processed in site batches.
 enum class OptimizationWorkspaceKind {
     GlobalParameters,
     AllBranchGradient,
 };
 
+// Policy for choosing a site batch from current free VRAM. target_workspace is
+// an upper preference, while free_memory_fraction and safety_factor retain
+// headroom for resident tree state and allocator overhead.
 struct SiteBatchSelectionConfig {
     size_t min_sites = 128;
     size_t alignment = 128;
@@ -34,6 +39,8 @@ struct SiteBatchSelection {
     size_t memory_budget_bytes = 0;
 };
 
+// Return a deterministic aligned batch size and its estimated memory budget.
+// free_gpu_bytes == 0 queries the active CUDA device.
 SiteBatchSelection chooseOptimizationSiteBatchSize(
     size_t nodes,
     size_t tips,

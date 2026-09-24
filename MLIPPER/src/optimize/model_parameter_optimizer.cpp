@@ -331,6 +331,9 @@ GammaAlphaOptimizationResult GlobalModelOptimizer::optimizeAlpha(
     return result;
 }
 
+// Coordinate-descent driver. Each sub-optimizer is responsible for restoring
+// rejected values through its callbacks. A round is committed only after the
+// complete model/branch state has a finite nondecreasing full-tree likelihood.
 FinalModelOptimizationResult GlobalModelOptimizer::optimize(
     std::vector<double>& frequencies,
     std::vector<double>& rates,

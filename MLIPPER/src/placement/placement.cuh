@@ -47,7 +47,9 @@ struct PlacementScratchOverride {
 
 // Scores one query against d_ops without changing the tree. All override
 // pointers are borrowed for the duration of the call; their matching capacity
-// fields are validated before kernels launch.
+// fields are validated before kernels launch. d_ops use child-endpoint target
+// IDs and must describe the same resident topology as D. smoothing bounds the
+// branch-coordinate iterations; returned target IDs remain in that topology.
 RawPlacementResult EvaluatePlacementCandidates(
     const DeviceTree& D,
     const NodeOpInfo* d_ops,

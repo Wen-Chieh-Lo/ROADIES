@@ -63,12 +63,19 @@ struct GpuRuntimeProbe {
     int memory_used_mb = 0;
 };
 
+// Cross-process reservations live in one POSIX shared-memory object per physical
+// GPU. CUDA ordinals are process-local and can change under device visibility,
+// so object names use the normalized PCI bus ID instead. PID plus Linux process
+// start ticks prevents a recycled PID from inheriting a stale reservation.
 struct SharedGpuAdmissionEntry {
     pid_t pid = 0;
     int reserved_memory_mb = 0;
     std::uint64_t process_start_ticks = 0;
 };
 
+// Fixed-size, versioned POD layout shared by independently started processes.
+// Every read or mutation occurs under the corresponding per-device record lock;
+// a schema mismatch is reinitialized only while that lock is held.
 struct SharedGpuAdmissionState {
     uint32_t magic = 0;
     uint32_t version = 0;
@@ -1036,7 +1043,10 @@ static DeviceReservation admit_any_visible_device_or_wait_or_throw(
         process_start_ticks(pid).value_or(0);
     bool announced_wait = false;
     while (true) {
-        // Serialize only the short choose-and-reserve operation. This prevents
+        // Lock order is global selection first, then one per-device lock at a
+        // time during inspection/admission. Specific-device callers acquire
+        // only a device lock, so this order cannot form a reverse dependency.
+        // Serialize only the short choose-and-reserve operation to prevent
         // concurrent auto-mode processes from all selecting the same snapshot.
         AdmissionLock selection_lock =
             lock_admission_or_throw("all_visible_devices");

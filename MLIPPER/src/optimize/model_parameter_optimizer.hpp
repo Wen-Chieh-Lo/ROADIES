@@ -6,6 +6,8 @@
 
 namespace mlipper {
 
+// Result objects retain both sides of an attempted coordinate update so logs
+// and callers can distinguish rejected proposals from accepted no-op changes.
 struct EquilibriumFrequencyOptimizationResult {
     std::vector<double> initial_frequencies;
     std::vector<double> frequencies;
@@ -33,12 +35,16 @@ struct GammaAlphaOptimizationResult {
     bool accepted = false;
 };
 
+// Automatic selects resident or site-batched execution from available VRAM.
+// Explicit modes are primarily reproducibility and diagnostics controls.
 enum class GlobalOptimizationBackend {
     Automatic,
     ResidentSequential,
     SiteBatchedSequential,
 };
 
+// Alternates model coordinates and branch-length sweeps until the full-tree
+// likelihood improvement is at most likelihood_tolerance or max_rounds ends.
 struct FinalModelOptimizationOptions {
     int max_rounds = 100;
     int branch_length_sweeps = 8;
@@ -77,6 +83,8 @@ struct GlobalModelOptimizerCallbacks {
     std::function<void()> branch_lengths_accepted;
 };
 
+// CPU search coordinator. Numerical likelihood state lives behind callbacks;
+// accepted values are written into the referenced frequency/rate/alpha inputs.
 class GlobalModelOptimizer {
 public:
     GtrRateOptimizationResult optimizeSubstitutionRates(

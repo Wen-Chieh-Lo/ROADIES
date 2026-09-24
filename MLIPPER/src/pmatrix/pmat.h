@@ -3,11 +3,13 @@
 #include <vector>
 
 struct EigResult {
+    // Row-major matrices satisfying Q = V * diag(lambdas) * Vinv.
     std::vector<double> lambdas;
     std::vector<double> V;
     std::vector<double> Vinv;
 };
 
+// Eigendecompose a reversible rate matrix using pi for the symmetric transform.
 EigResult gtr_eigendecomp_cpu(
     const double* Q_rowmajor,
     const double* pi,

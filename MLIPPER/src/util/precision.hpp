@@ -3,6 +3,9 @@
 #include <cuda_runtime.h>
 #include <cmath>
 
+// One compile-time precision mode is shared by host packing, device buffers,
+// kernels, and transition matrices. Mixing objects compiled with different
+// MLIPPER_USE_DOUBLE settings would change layouts and is unsupported.
 #if defined(MLIPPER_USE_DOUBLE)
 using fp_t = double;
 using fp2_t = double2;

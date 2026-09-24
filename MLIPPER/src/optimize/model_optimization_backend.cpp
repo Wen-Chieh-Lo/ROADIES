@@ -279,7 +279,7 @@ void ModelOptimizationBackend::installSubstitutionModel(
         mlipper::util::checked_allocation_bytes<fp_t>(
             frequencies_fp.size(), "model frequency upload"));
     if (gpu_pmats_only) {
-        build_all_branch_pmats_device(
+        build_all_branch_pmats_gpu(
             device_tree.N, device_tree.states, device_tree.rate_cats,
             device_tree.d_blen, device_tree.d_V, device_tree.d_Vinv,
             device_tree.d_lambdas, device_tree.d_pmat,
@@ -334,7 +334,7 @@ void ModelOptimizationBackend::installGammaAlpha(
         mlipper::util::checked_allocation_bytes<fp_t>(
             lambdas.size(), "gamma eigenvalue upload"));
     if (gpu_pmats_only) {
-        build_all_branch_pmats_device(
+        build_all_branch_pmats_gpu(
             device_tree.N, device_tree.states, device_tree.rate_cats,
             device_tree.d_blen, device_tree.d_V, device_tree.d_Vinv,
             device_tree.d_lambdas, device_tree.d_pmat,
@@ -685,10 +685,10 @@ double RootSiteBatchWorkspace::optimizeSequentialBranchNewtonSweeps(
         D.d_blen + optimized_root_child,
         &host.blen[static_cast<size_t>(optimized_root_child)], sizeof(fp_t),
         cudaMemcpyHostToDevice, stream));
-    build_single_branch_pmat_device(
+    build_single_branch_pmat_gpu(
         artificial_root_child, D.states, D.rate_cats, D.d_blen,
         D.d_V, D.d_Vinv, D.d_lambdas, D.d_pmat, stream);
-    build_single_branch_pmat_device(
+    build_single_branch_pmat_gpu(
         optimized_root_child, D.states, D.rate_cats, D.d_blen,
         D.d_V, D.d_Vinv, D.d_lambdas, D.d_pmat, stream);
 
@@ -814,19 +814,19 @@ double RootSiteBatchWorkspace::optimizeSequentialBranchNewtonSweeps(
             }
             // Refresh the parent-side message from all previously accepted
             // coordinates before optimizing this edge.
-            BuildSingleTreeMidBaseWarpSitePrepared(
+            BuildSingleTreeEdgeOutsideWarpSitePrepared(
                 D, prepared_downward_ops_, down_op, stream);
             if (child_id != artificial_root_child) {
                 OptimizeSingleTreeEdgeFromCurrentClvsWarpSite(
                     D, child_id, branch_sumtable_.get(), edge_gradient_.get(),
                     edge_hessian_.get(), branch_newton_state_.get(),
                     branch_newton_failure_.get(), newton_iterations, stream);
-                build_single_branch_pmat_device(
+                build_single_branch_pmat_gpu(
                     child_id, D.states, D.rate_cats, D.d_blen,
                     D.d_V, D.d_Vinv, D.d_lambdas, D.d_pmat, stream);
             }
             if (!tree.nodes[static_cast<size_t>(child_id)].is_tip) {
-                // The parent-side mid-base message is independent of this
+                // The parent-side edge-outside message is independent of this
                 // edge length and was just computed above. Reapply only the
                 // accepted target PMAT; tips have no descendants that consume
                 // a downward message, so they need no post-update refresh.

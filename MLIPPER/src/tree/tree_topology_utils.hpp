@@ -5,6 +5,10 @@
 
 #include "tree.hpp"
 
+// Recompute deterministic left-before-right preorder and postorder lists after
+// a topology edit. This helper assumes parent/child links already form a valid
+// rooted tree; it does not detect cycles, shared children, or disconnected
+// nodes. An invalid root produces empty traversals without changing node IDs.
 inline void rebuild_traversals(TreeBuildResult& tree)
 {
     tree.preorder.clear();

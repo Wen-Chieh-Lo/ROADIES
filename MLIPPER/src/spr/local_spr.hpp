@@ -1,7 +1,6 @@
 #pragma once
 
 #include <functional>
-#include <memory>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -19,18 +18,6 @@ enum class TopologyMoveType {
 }
 
 struct LocalSPRSessionWorkspaceSet;
-struct LocalSPRPersistentWorkspaceImpl;
-
-struct LocalSPRPersistentWorkspace {
-    LocalSPRPersistentWorkspace();
-    ~LocalSPRPersistentWorkspace();
-    LocalSPRPersistentWorkspace(LocalSPRPersistentWorkspace&& other) noexcept;
-    LocalSPRPersistentWorkspace& operator=(LocalSPRPersistentWorkspace&& other) noexcept;
-    LocalSPRPersistentWorkspace(const LocalSPRPersistentWorkspace&) = delete;
-    LocalSPRPersistentWorkspace& operator=(const LocalSPRPersistentWorkspace&) = delete;
-
-    std::unique_ptr<LocalSPRPersistentWorkspaceImpl> impl;
-};
 
 // Non-owning inputs and mutable session state for one refinement invocation.
 // The caller must keep every referenced object alive until the run completes.
@@ -89,7 +76,6 @@ struct TopologyRefinementRunContext {
     int cluster_threshold = 0;
     int topk_per_unit = 0;
     int rounds = 0;
-    LocalSPRPersistentWorkspace* persistent_workspace = nullptr;
     const std::vector<mlipper::divide_and_conquer::TreeEdgeEndpoints>& anchors;
     LocalSPRSessionWorkspaceSet& session_workspaces;
     // Invoked before an accepted candidate replaces state.tree. This permits

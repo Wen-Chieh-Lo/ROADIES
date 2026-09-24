@@ -1,15 +1,11 @@
 #pragma once
 
 #include <algorithm>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
-#include <future>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -18,17 +14,27 @@
 #include <utility>
 #include <vector>
 
+#include <tbb/task_arena.h>
+
 #include "local_spr.hpp"
 #include "placement/placement.cuh"
 #include "util/mlipper_util.h"
 #include "tree/divide_and_conquer.hpp"
 
+// Describes the local topology left behind after detaching one subtree. All
+// values are current TreeBuildResult node IDs, not stable_node_label values.
+// free_internal_id is the now-unused degree-three attachment node that can be
+// recycled when the subtree is regrafted.
 struct PruneInfo {
     int pruned_id = -1, free_internal_id = -1, sibling_id = -1, grandparent_id = -1;
 };
 
 using LocalSPRInsertionAnchor = mlipper::divide_and_conquer::TreeEdgeEndpoints;
 
+// A connected search neighborhood around one or more recently inserted edges.
+// envelope_mask is indexed by current node ID; envelope_nodes is the compact
+// iteration form of the same set. anchor_indices refer to the caller's anchor
+// vector and therefore remain meaningful only for that search round.
 struct LocalSPRRepairUnit {
     int unit_id = -1;
     std::vector<LocalSPRInsertionAnchor> anchors;
@@ -37,6 +43,9 @@ struct LocalSPRRepairUnit {
     std::vector<int> envelope_nodes;
 };
 
+// One scored prune/regraft proposal. Node IDs and cached paths describe the
+// topology on which ranking was performed and must be resolved or discarded
+// after an accepted move mutates that topology.
 struct LocalSPRCandidateMove {
     int repair_unit_id = -1, prune_root_id = -1;
     int regraft_child_id = -1, regraft_parent_id = -1, old_parent_id = -1;
@@ -51,6 +60,8 @@ struct LocalSPRSearchSummary {
     size_t retained_candidates = 0, selected_candidates = 0;
 };
 
+// CPU-side work prepared for one possible prune root. legal candidate edges
+// are represented by their child node, matching MLIPPER placement operations.
 struct LocalSPRPruneRootWorkItem {
     int prune_root_id = -1, skeleton_distance = std::numeric_limits<int>::max();
     std::vector<int> subtree_nodes;
@@ -67,6 +78,9 @@ struct LocalSPRPruneRootEvaluationResult {
     size_t enumerated_candidates = 0;
 };
 
+// Fully materialized pruned topology and traversal state for one scoring lane.
+// The OwnedSubtreeWorkspace held by the lane owns device storage; the members
+// here are host values or non-owning operation descriptions.
 struct LocalSPRPreparedPruneRoot {
     bool valid = false;
     int lane_index = -1, prune_root_id = -1;
@@ -95,6 +109,8 @@ struct LocalSPRScoringWorkspace {
     std::vector<int> dirty_upward_nodes;
 };
 
+// Reusable GPU-shaped scratch topology used to score several independent prune
+// roots in one launch. It is storage only and is not a biological tree.
 struct LocalSPRBatchScoringWorkspace {
     bool initialized = false;
     int batch_capacity = 0, node_capacity = 0;
@@ -111,83 +127,6 @@ struct LocalSPRScoringLane {
     LocalSPRScoringWorkspace workspace{};
 };
 
-class FixedThreadPool {
-public:
-    explicit FixedThreadPool(int worker_count)
-    {
-        const int pool_size = std::max(1, worker_count);
-        workers_.reserve(static_cast<size_t>(pool_size));
-        for (int worker_idx = 0; worker_idx < pool_size; ++worker_idx) {
-            workers_.emplace_back([this]() { worker_loop(); });
-        }
-    }
-
-    ~FixedThreadPool()
-    {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            stopping_ = true;
-        }
-        cv_.notify_all();
-        for (std::thread& worker : workers_) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
-    }
-
-    template <typename Fn>
-    auto submit(Fn&& fn)
-        -> std::future<std::invoke_result_t<std::decay_t<Fn>&>>
-    {
-        using Result = std::invoke_result_t<std::decay_t<Fn>&>;
-        auto task =
-            std::make_shared<std::packaged_task<Result()>>(std::forward<Fn>(fn));
-        std::future<Result> future = task->get_future();
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (stopping_) {
-                throw std::runtime_error(
-                    "local SPR thread pool is shutting down");
-            }
-            tasks_.emplace_back([task]() { (*task)(); });
-        }
-        cv_.notify_one();
-        return future;
-    }
-
-private:
-    void worker_loop()
-    {
-        while (true) {
-            std::function<void()> task;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                cv_.wait(lock, [this]() {
-                    return stopping_ || !tasks_.empty();
-                });
-                if (stopping_ && tasks_.empty()) {
-                    return;
-                }
-                task = std::move(tasks_.front());
-                tasks_.pop_front();
-            }
-            task();
-        }
-    }
-
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<std::function<void()>> tasks_;
-    std::vector<std::thread> workers_;
-    bool stopping_ = false;
-};
-
-struct LocalSPRExecutionResources {
-    int worker_count = 0;
-    std::unique_ptr<FixedThreadPool> worker_pool;
-};
-
 struct LocalSPRRankingWorkspace {
     // Streams and events are bound to owner_device_id and must be released or
     // rebuilt before this workspace is reused on another CUDA device.
@@ -196,10 +135,6 @@ struct LocalSPRRankingWorkspace {
     int scoring_lane_count = 0;
     std::vector<LocalSPRScoringLane> scoring_lanes;
     LocalSPRBatchScoringWorkspace batch_scoring_workspace;
-};
-
-struct LocalSPRPersistentWorkspaceImpl {
-    LocalSPRExecutionResources execution_resources{};
 };
 
 inline void ensure_local_spr_scoring_lane_current_device(
@@ -220,6 +155,9 @@ inline int local_spr_target_id_from_op(const NodeOpInfo& op)
     return target_is_left ? op.left_id : (target_is_right ? op.right_id : op.parent_id);
 }
 
+// Workspace for validating selected moves against a fully rebuilt likelihood.
+// CUDA resources are tied to device_id and may not be reused after switching
+// the active CUDA device.
 struct LocalSPREvalWorkspace {
     OwnedSubtreeWorkspace subtree_workspace{};
     TreeBuildResult tree{};
@@ -261,6 +199,9 @@ struct IntDisjointSet {
     }
 };
 
+// Read-mostly inputs shared by all candidate-enumeration and scoring stages in
+// one refinement round. References must outlive the entire search; node-indexed
+// collections correspond to state.tree before any candidate is accepted.
 struct TopologyRefinementSearchContext {
     TopologyRefinementState& state;
     cudaStream_t stream = nullptr;
@@ -370,13 +311,14 @@ void regraft_subtree_for_spr(
 std::vector<LocalSPRCandidateMove> rank_local_spr_candidates(
     const TopologyRefinementSearchContext& ctx, const TreeBuildResult& base_tree,
     const std::vector<LocalSPRRepairUnit>& repair_units, LocalSPRRankingWorkspace& ranking_workspace,
-    FixedThreadPool& worker_pool,
+    tbb::task_arena& task_arena,
+    int scoring_lane_count,
     LocalSPRSearchSummary& search_summary);
 
 void release_local_spr_session_workspace_set(
     LocalSPRSessionWorkspaceSet& workspace_set,
     cudaStream_t stream);
 
-int local_spr_scoring_lane_count();
+int choose_local_spr_scoring_lane_count(const DeviceTree& device);
 
 void release_local_spr_ranking_workspace(LocalSPRRankingWorkspace& workspace);

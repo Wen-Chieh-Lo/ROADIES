@@ -14,6 +14,9 @@ struct Alignment {
 };
 
 struct ModelConfig {
+    // freqs uses state order A,C,G,T for DNA. rates contains the six reversible
+    // GTR exchangeabilities AC, AG, AT, CG, CT, GT. ncat/alpha describe the
+    // mean-discretized Gamma categories consumed by MLIPPER.
     int states = 4;
     std::string subst_model;
     int ncat = 1;
@@ -24,6 +27,9 @@ struct ModelConfig {
     bool per_rate_scaling = true;
 };
 
+// Read FASTA or sequential/interleaved PHYLIP based on file content. This is a
+// syntactic reader; workflow-specific name, symbol, and model checks are done
+// by input_validation.
 Alignment read_alignment_file(const std::string& path);
 
 } // namespace parse

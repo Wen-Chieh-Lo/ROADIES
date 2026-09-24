@@ -502,6 +502,10 @@ std::vector<LocalSPRInsertionAnchor> refresh_local_spr_anchor_parents(
     return refreshed;
 }
 
+// Cluster nearby insertion anchors with a disjoint set, then form each unit's
+// search envelope as the union of nodes within envelope_radius of any anchor
+// edge. Clustering controls which insertions compete as one repair problem;
+// the envelope independently limits the legal prune/regraft neighborhood.
 std::vector<LocalSPRRepairUnit> build_local_spr_repair_units(
     const TreeBuildResult& tree,
     const std::vector<LocalSPRInsertionAnchor>& anchors,
@@ -758,6 +762,10 @@ std::vector<int> select_local_spr_seed_edges(
     return seed_edges;
 }
 
+// Greedily choose mutually independent moves from an already ranked list.
+// At most one move is selected per repair unit, and selected prune subtrees or
+// regraft paths may not overlap. This permits later application without one
+// move invalidating another move selected in the same round.
 std::vector<LocalSPRCandidateMove> select_local_spr_candidates(
     const std::vector<LocalSPRCandidateMove>& ranked_candidates,
     int node_count)
@@ -826,6 +834,9 @@ std::vector<LocalSPRCandidateMove> select_local_spr_candidates(
     return selected;
 }
 
+// Revalidate cached node relationships after earlier accepted moves. Candidate
+// IDs are deliberately not trusted across topology mutations; a mismatch is a
+// normal stale-candidate result rather than an invariant failure.
 bool local_spr_candidate_still_legal(
     const TreeBuildResult& tree,
     const LocalSPRRepairUnit& unit,
@@ -883,6 +894,9 @@ bool local_spr_candidate_still_legal(
     return true;
 }
 
+// Detach pruned_id and suppress its former parent, preserving the represented
+// unrooted edge length by adding the two adjacent branches. Validation happens
+// before mutation so false guarantees that tree is unchanged.
 bool prune_subtree_for_spr(
     TreeBuildResult& tree,
     int pruned_id,

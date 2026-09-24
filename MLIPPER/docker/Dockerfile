@@ -1,6 +1,9 @@
-FROM nvidia/cuda:12.3.2-devel-ubuntu22.04
+ARG CUDA_VERSION=11.8.0
+ARG UBUNTU_VERSION=22.04
 
-ARG LIBPLL_REV=14675b3f91630418ddd9e577deaa8408734637f6
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+
+ARG LIBPLL_VERSION=0.4.0
 
 SHELL ["/bin/bash", "-lc"]
 
@@ -51,9 +54,8 @@ RUN success=0; \
     done; \
     test "$success" = 1
 
-RUN git clone --quiet https://github.com/xflouris/libpll-2.git /tmp/libpll-2 \
-    && git -C /tmp/libpll-2 checkout --quiet --detach "${LIBPLL_REV}" \
-    && test "$(git -C /tmp/libpll-2 rev-parse HEAD)" = "${LIBPLL_REV}" \
+RUN git clone --quiet --branch "${LIBPLL_VERSION}" --depth 1 \
+    https://github.com/xflouris/libpll-2.git /tmp/libpll-2 \
     && cd /tmp/libpll-2 \
     && ./autogen.sh \
     && ./configure --prefix=/usr/local \

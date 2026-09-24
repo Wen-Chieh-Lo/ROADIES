@@ -52,6 +52,9 @@ std::string format_newick_name(const std::string& name) {
     return quoted;
 }
 
+// Detached serialization view. Keeping it separate lets optional short-edge
+// collapse rewrite output multifurcations without mutating the binary resident
+// tree or invalidating its node IDs.
 struct OutputTreeNode {
     int source_node_id = -1;
     double branch_length_to_parent = 0.0;
@@ -93,6 +96,8 @@ OutputTreeNode build_output_subtree(const TreeBuildResult& tree, int node_id) {
     return out;
 }
 
+// Contract an internal edge in the serialization view and transfer its length
+// to each promoted child so root-to-tip path lengths remain unchanged.
 void collapse_short_internal_output_branches(
     OutputTreeNode& node,
     double epsilon)
