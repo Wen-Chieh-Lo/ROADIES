@@ -4,9 +4,11 @@ This document describes how ROADIES passes one gene at a time to MLIPPER.
 
 ## Current ROADIES integration
 
-ROADIES currently calls a locally installed MLIPPER executable from its
-placement workflow. It does not pull or start the MLIPPER Docker image
-automatically.
+ROADIES calls MLIPPER only for GPU-backed placement, selected with
+`--mode placement --gpu N` where `N > 0`. Placement runs without `--gpu` (or
+with `--gpu 0`) use RAxML-NG instead. The GPU path invokes the MLIPPER
+executable built inside the ROADIES checkout; it does not pull or start the
+MLIPPER Docker image automatically.
 
 The ROADIES placement command has the following form:
 
